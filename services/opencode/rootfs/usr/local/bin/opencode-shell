@@ -1,0 +1,11 @@
+#!/bin/sh
+# Opens a login shell as the "opencode" user (home /data, projects in
+# /data/workspace), e.g. after `railway ssh`, so files you create belong to the
+# same user as the agent's.
+set -eu
+
+if [ "$(id -u)" -eq 0 ]; then
+  cd /data/workspace 2>/dev/null || cd /data
+  exec runuser -u opencode -- bash -l "$@"
+fi
+exec bash -l "$@"

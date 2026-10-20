@@ -1,0 +1,33 @@
+#!/bin/sh
+# Prints "name|version" for the tools baked into the image. Runs at build time
+# (output: /etc/opencode-railway/versions.txt, printed at every start).
+set -u
+
+v() {
+  name="$1"
+  shift
+  out="$("$@" 2>&1 | head -n 1 | tr -d '\r')"
+  [ -n "${out}" ] || out="unavailable"
+  printf '%s|%s\n' "${name}" "${out}"
+}
+
+# OpenCode creates its XDG directories on start; keep that out of /root.
+oc_version() {
+  env HOME=/tmp/oc-versions XDG_CONFIG_HOME=/tmp/oc-versions/config XDG_DATA_HOME=/tmp/oc-versions/data \
+    XDG_CACHE_HOME=/tmp/oc-versions/cache XDG_STATE_HOME=/tmp/oc-versions/state OPENCODE_DISABLE_AUTOUPDATE=1 \
+    /usr/local/bin/opencode --version
+  rc=$?
+  rm -rf /tmp/oc-versions /tmp/opencode
+  return "${rc}"
+}
+
+v "Ubuntu" sh -c '. /etc/os-release && echo "${PRETTY_NAME}"'
+v "OpenCode" oc_version
+v "Node.js" node --version
+v "npm" npm --version
+v "Python" python3 --version
+v "uv" uv --version
+v "git" git --version
+v "GitHub CLI" gh --version
+v "ripgrep" rg --version
+v "Caddy" caddy version

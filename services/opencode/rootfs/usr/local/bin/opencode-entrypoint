@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# OpenCode on Railway: container entrypoint.
+#
+# Runs as root under tini (Railway's own init is PID 1, so nothing here relies
+# on being PID 1):
+#   1. validates inputs; OPENCODE_SERVER_PASSWORD is mandatory, so the agent is
+#      never served without authentication,
+#   2. prepares /data on the volume: the home of user "opencode" with OpenCode's
+#      config (~/.config/opencode), data and credentials (~/.local/share/opencode),
+#      state, caches and the projects folder ~/workspace,
+#   3. writes the variables login shells need to an env file and sets up git/gh,
+#   4. starts `opencode serve` on 127.0.0.1 as "opencode" under a restart loop,
+#   5. execs Caddy on $PORT (as www-data): /healthz for Railway's probe,
+#      everything else proxied to OpenCode, which enforces its own basic auth.
+set -Eeuo pipefail
+
+readonly OC_USER="opencode"
+readonly OC_HOME="/data"
+readonly WORKSPACE_DIR="${OC_HOME}/workspace"
+readonly INIT_MARKER="${OC_HOME}/.opencode-railway-initialized"
+readonly LIB_DIR="/usr/local/lib/opencode-railway"
+readonly RUN_DIR="/run/opencode-railway"
+readonly ETC_DIR="/etc/opencode-railway"
+readonly ENV_FILE="${ETC_DIR}/env.sh"
+readonly SUDOERS_FILE="/etc/sudoers.d/90-opencode"
+readonly MIN_PASSWORD_LENGTH=12
+readonly USER_PATH="${OC_HOME}/.local/bin:${OC_HOME}/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Directories (relative to /data) that must exist and belong to "opencode".
+readonly HOME_DIRS=(
+  .config .config/opencode
+  .local .local/bin .local/share .local/share/opencode .local/state
+  .cache .npm-global .ssh workspace
+)
+
+# Variables copied into login shells (`opencode-shell` after `railway ssh`).
+# The agent's own shells and the web terminal inherit them from the server
+# process anyway. Extend with OPENCODE_ENV_PASSTHROUGH (comma-separated names).
+readonly SHARED_VARS=(
+  OPENCODE_SERVER_USERNAME OPENCODE_SERVER_PASSWORD OPENCODE_INTERNAL_PORT
+  OPENCODE_DISABLE_AUTOUPDATE OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT
+  ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY GOOGLE_GENERATIVE_AI_API_KEY OPENCODE_API_KEY
+  GROQ_API_KEY DEEPSEEK_API_KEY XAI_API_KEY MISTRAL_API_KEY
+  GH_TOKEN GIT_USER_NAME GIT_USER_EMAIL TZ
+  RAILWAY_PUBLIC_DOMAIN RAILWAY_PROJECT_NAME RAILWAY_ENVIRONMENT_NAME RAILWAY_SERVICE_NAME
+)
+
+HTTP_PORT="${PORT:-8080}"
+INTERNAL_PORT="${OPENCODE_INTERNAL_PORT:-4096}"
+LOG_LEVEL="${OPENCODE_LOG_LEVEL:-WARN}"
+
+log()  { printf '[opencode-railway] %s\n' "$*"; }
+warn() { printf '[opencode-railway] WARNING: %s\n' "$*" >&2; }
+die()  { printf '[opencode-railway] ERROR: %s\n' "$*" >&2; exit 1; }
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Runs a command as "opencode" with its home on the volume. The rest of the
+# environment (provider keys, GH_TOKEN, ...) is inherited.
+as_oc() {
+  setpriv --reuid="${OC_USER}" --regid="${OC_USER}" --init-groups \
+    env HOME="${OC_HOME}" USER="${OC_USER}" LOGNAME="${OC_USER}" SHELL=/bin/bash PATH="${USER_PATH}" "$@"
+}
+
+validate_port() {
+  local name="$1" value="$2"
+  case "${value}" in
+    ''|*[!0-9]*) die "${name} must be a number (got '${value}')" ;;
+  esac
+  if [ "${value}" -lt 1 ] || [ "${value}" -gt 65535 ]; then
+    die "${name} must be between 1 and 65535 (got ${value})"
+  fi
+}
+
+validate_inputs() {
+  [ "$(id -u)" -eq 0 ] || die "the entrypoint must start as root; it drops privileges itself"
+  validate_port PORT "${HTTP_PORT}"
+  validate_port OPENCODE_INTERNAL_PORT "${INTERNAL_PORT}"
+  [ "${HTTP_PORT}" != "${INTERNAL_PORT}" ] || die "PORT and OPENCODE_INTERNAL_PORT must differ (both ${HTTP_PORT})"
+
+  if [ -z "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+    die "OPENCODE_SERVER_PASSWORD is empty. OpenCode would serve an agent with shell access without a login; set a password with at least ${MIN_PASSWORD_LENGTH} characters and redeploy"
+  fi
+  if [ "${#OPENCODE_SERVER_PASSWORD}" -lt "${MIN_PASSWORD_LENGTH}" ]; then
+    die "OPENCODE_SERVER_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters"
+  fi
+  case "${OPENCODE_SERVER_PASSWORD}" in
+    *$'\n'*|*$'\r'*) die "OPENCODE_SERVER_PASSWORD must not contain line breaks" ;;
+  esac
+
+  # OpenCode treats an empty-but-set username as "", so normalize it here.
+  OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-opencode}"
+  if [[ ! "${OPENCODE_SERVER_USERNAME}" =~ ^[A-Za-z0-9._@-]+$ ]]; then
+    die "OPENCODE_SERVER_USERNAME may only contain letters, digits, '.', '_', '@' and '-'"
+  fi
+  export OPENCODE_SERVER_USERNAME
+
+  case "${LOG_LEVEL}" in
+    DEBUG|INFO|WARN|ERROR) ;;
+    *) warn "OPENCODE_LOG_LEVEL must be DEBUG, INFO, WARN or ERROR (got '${LOG_LEVEL}'); using WARN"; LOG_LEVEL="WARN" ;;
+  esac
+  export OPENCODE_INTERNAL_PORT="${INTERNAL_PORT}"
+}
+
+configure_sudo() {
+  if is_true "${AGENT_SUDO:-true}"; then
+    if grep -qE '^NoNewPrivs:[[:space:]]+1' /proc/self/status 2>/dev/null; then
+      warn "the runtime sets no_new_privs: sudo will not work in this container"
+    fi
+    log "user ${OC_USER} has passwordless sudo (AGENT_SUDO=true)"
+  else
+    rm -f "${SUDOERS_FILE}"
+    log "sudo disabled for ${OC_USER} (AGENT_SUDO=${AGENT_SUDO})"
+  fi
+}
+
+prepare_data() {
+  if ! mountpoint -q "${OC_HOME}"; then
+    warn "${OC_HOME} is not a mounted volume: projects, sessions and provider logins will be lost on redeploy. Attach a volume at ${OC_HOME}."
+  fi
+  chown "${OC_USER}:${OC_USER}" "${OC_HOME}"
+  chmod 0750 "${OC_HOME}"
+
+  local dir
+  if [ ! -f "${INIT_MARKER}" ]; then
+    log "first boot: preparing ${OC_HOME} on the volume"
+    cp -an /etc/skel/. "${OC_HOME}/"
+    for dir in "${HOME_DIRS[@]}"; do
+      mkdir -p "${OC_HOME}/${dir}"
+    done
+    find "${OC_HOME}" -mindepth 1 -maxdepth 1 ! -name lost+found \
+      -exec chown -R "${OC_USER}:${OC_USER}" {} +
+    date -u +%FT%TZ > "${INIT_MARKER}"
+    chown "${OC_USER}:${OC_USER}" "${INIT_MARKER}"
+  else
+    # Never walk the whole volume on every boot; repair only the known top-level
+    # directories (e.g. after something ran as root via `railway ssh`).
+    for dir in "${HOME_DIRS[@]}"; do
+      mkdir -p "${OC_HOME}/${dir}"
+      chown "${OC_USER}:${OC_USER}" "${OC_HOME}/${dir}"
+    done
+  fi
+  chmod 0700 "${OC_HOME}/.ssh"
+}
+
+write_env_file() {
+  local name names=("${SHARED_VARS[@]}") extra=()
+  if [ -n "${OPENCODE_ENV_PASSTHROUGH:-}" ]; then
+    IFS=', ' read -r -a extra <<< "${OPENCODE_ENV_PASSTHROUGH}"
+    names+=("${extra[@]}")
+  fi
+  install -d -m 0755 "${ETC_DIR}"
+  (
+    umask 027
+    {
+      echo "# Generated at container start from Railway variables. Do not edit."
+      for name in "${names[@]}"; do
+        [[ "${name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        if [ -n "${!name:-}" ]; then
+          printf 'export %s=%q\n' "${name}" "${!name}"
+        fi
+      done
+    } > "${ENV_FILE}"
+  )
+  chown "root:${OC_USER}" "${ENV_FILE}"
+  chmod 0640 "${ENV_FILE}"
+}
+
+configure_git() {
+  as_oc git config --global init.defaultBranch >/dev/null 2>&1 \
+    || as_oc git config --global init.defaultBranch main || true
+
+  # Explicit variables win; otherwise keep what is on the volume, and only
+  # fall back to a neutral identity so the agent's first commit does not fail.
+  if [ -n "${GIT_USER_NAME:-}" ]; then
+    as_oc git config --global user.name "${GIT_USER_NAME}" || warn "could not set git user.name"
+  elif ! as_oc git config --global user.name >/dev/null 2>&1; then
+    as_oc git config --global user.name "OpenCode" || true
+  fi
+  if [ -n "${GIT_USER_EMAIL:-}" ]; then
+    as_oc git config --global user.email "${GIT_USER_EMAIL}" || warn "could not set git user.email"
+  elif ! as_oc git config --global user.email >/dev/null 2>&1; then
+    as_oc git config --global user.email "opencode@localhost" || true
+  fi
+
+  if [ -n "${GH_TOKEN:-}" ]; then
+    if as_oc gh auth setup-git --hostname github.com >/dev/null 2>&1; then
+      log "git uses GH_TOKEN for https://github.com (gh credential helper)"
+    else
+      warn "gh auth setup-git failed; HTTPS git auth via GH_TOKEN is not configured"
+    fi
+  fi
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    warn "GITHUB_TOKEN is set: OpenCode reads it as a GitHub Copilot credential. For git and gh, use GH_TOKEN instead."
+  fi
+}
+
+clone_repo_once() {
+  local repo="${GIT_REPO:-}" name target
+  [ -n "${repo}" ] || return 0
+  case "${repo}" in
+    https://*|ssh://*|git@*) ;;
+    *) warn "GIT_REPO must start with https://, ssh:// or git@ (got '${repo}'); skipping the clone"; return 0 ;;
+  esac
+  name="$(basename "${repo%/}")"
+  name="${name%.git}"
+  case "${name}" in
+    ''|.|..|*[!A-Za-z0-9._-]*) warn "cannot derive a folder name from GIT_REPO; skipping the clone"; return 0 ;;
+  esac
+  target="${WORKSPACE_DIR}/${name}"
+  [ -e "${target}" ] && return 0
+  log "cloning ${repo} into ${target} (background)"
+  (
+    if as_oc env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes" \
+        git clone --quiet -- "${repo}" "${target}"; then
+      log "clone of ${repo} finished: open ${target} as a project in the web UI"
+    else
+      warn "clone of ${repo} failed (check GIT_REPO, and GH_TOKEN or an SSH key in ${OC_HOME}/.ssh for private repositories)"
+    fi
+  ) &
+}
+
+start_opencode() {
+  log "$(tr '|' ' ' < "${ETC_DIR}/versions.txt" | paste -sd ';' - | sed 's/;/; /g')"
+  log "starting OpenCode server on 127.0.0.1:${INTERNAL_PORT} as ${OC_USER} (projects in ${WORKSPACE_DIR})"
+  # PORT is removed so dev servers the agent starts do not collide with Caddy.
+  "${LIB_DIR}/supervise" opencode \
+    setpriv --reuid="${OC_USER}" --regid="${OC_USER}" --init-groups \
+    env -u PORT -u OPENCODE_ENV_PASSTHROUGH \
+      HOME="${OC_HOME}" USER="${OC_USER}" LOGNAME="${OC_USER}" SHELL=/bin/bash \
+      PATH="${USER_PATH}" NPM_CONFIG_PREFIX="${OC_HOME}/.npm-global" \
+      OPENCODE_WORKSPACE="${WORKSPACE_DIR}" OPENCODE_LOG_LEVEL="${LOG_LEVEL}" \
+      "${LIB_DIR}/run-server" &
+}
+
+exec_caddy() {
+  local caddy_home="${RUN_DIR}/caddy" health_auth
+  install -d -m 0755 "${RUN_DIR}"
+  install -d -m 0750 -o www-data -g www-data "${caddy_home}"
+  OC_HTTP_PORT="${HTTP_PORT}" OC_INTERNAL_PORT="${INTERNAL_PORT}" \
+    "${LIB_DIR}/render-caddyfile" > "${RUN_DIR}/Caddyfile"
+  chown root:www-data "${RUN_DIR}/Caddyfile"
+  chmod 0640 "${RUN_DIR}/Caddyfile"
+
+  # The healthcheck credential reaches Caddy only through its own environment.
+  health_auth="Basic $(printf '%s:%s' "${OPENCODE_SERVER_USERNAME}" "${OPENCODE_SERVER_PASSWORD}" | base64 -w0)"
+  local caddy_env=(
+    env -i
+    HOME="${caddy_home}" XDG_DATA_HOME="${caddy_home}/data" XDG_CONFIG_HOME="${caddy_home}/config"
+    PATH=/usr/local/bin:/usr/bin:/bin
+    OPENCODE_HEALTH_AUTH="${health_auth}"
+  )
+  setpriv --reuid=www-data --regid=www-data --init-groups "${caddy_env[@]}" \
+    /usr/local/bin/caddy validate --config "${RUN_DIR}/Caddyfile" --adapter caddyfile >/dev/null 2>&1 \
+    || die "generated Caddyfile is invalid; run 'caddy validate --config ${RUN_DIR}/Caddyfile --adapter caddyfile' for details"
+
+  if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+    log "web UI: https://${RAILWAY_PUBLIC_DOMAIN} (user ${OPENCODE_SERVER_USERNAME}, password in the OPENCODE_SERVER_PASSWORD variable)"
+  else
+    warn "RAILWAY_PUBLIC_DOMAIN is not set; generate a domain under Settings > Networking (target port ${HTTP_PORT})"
+  fi
+  log "Caddy on :${HTTP_PORT}: /healthz for Railway, everything else proxied to OpenCode (basic auth)"
+  exec setpriv --reuid=www-data --regid=www-data --init-groups "${caddy_env[@]}" \
+    /usr/local/bin/caddy run --config "${RUN_DIR}/Caddyfile" --adapter caddyfile
+}
+
+main() {
+  validate_inputs
+  configure_sudo
+  prepare_data
+  write_env_file
+  configure_git
+  clone_repo_once
+  start_opencode
+  exec_caddy
+}
+
+main "$@"

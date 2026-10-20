@@ -1,0 +1,22 @@
+#!/bin/sh
+# Attaches the OpenCode terminal UI to the server running in this container,
+# so it shares sessions with the web UI.
+# Usage: opencode-tui [PROJECT_DIRECTORY]   (default: current directory if it
+#        is under /data, else /data/workspace)
+set -eu
+
+if [ "$(id -u)" -eq 0 ]; then
+  case "${1:-${PWD}}" in
+    /data|/data/*) dir="${1:-${PWD}}" ;;
+    *) dir="/data/workspace" ;;
+  esac
+  cd /data
+  exec runuser -u opencode -- "$0" "${dir}"
+fi
+
+dir="${1:-${PWD}}"
+if [ -r /etc/opencode-railway/env.sh ]; then
+  . /etc/opencode-railway/env.sh
+fi
+# `opencode attach` reads OPENCODE_SERVER_USERNAME/PASSWORD from the environment.
+exec /usr/local/bin/opencode attach "http://127.0.0.1:${OPENCODE_INTERNAL_PORT:-4096}" --dir "${dir}"

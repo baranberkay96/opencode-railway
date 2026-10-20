@@ -1,0 +1,48 @@
+#!/bin/sh
+# Usage: supervise NAME COMMAND [ARGS...]
+#
+# Keeps a long-running process alive: runs COMMAND, and when it exits, starts
+# it again after a short delay. A command that keeps dying quickly backs off
+# up to 30 s. TERM/INT/HUP stop the child and the loop.
+set -u
+
+name="${1:?usage: supervise NAME COMMAND [ARGS...]}"
+shift
+[ "$#" -gt 0 ] || { echo "supervise: missing command for ${name}" >&2; exit 2; }
+
+min_delay=3
+max_delay=30
+delay="${min_delay}"
+child=""
+
+stop() {
+  if [ -n "${child}" ]; then
+    kill -TERM "${child}" 2>/dev/null || true
+    wait "${child}" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap stop TERM INT HUP
+
+while :; do
+  started="$(date +%s)"
+  "$@" &
+  child=$!
+  rc=0
+  wait "${child}" || rc=$?
+  child=""
+  runtime=$(( $(date +%s) - started ))
+  if [ "${runtime}" -ge 60 ]; then
+    delay="${min_delay}"
+  fi
+  printf '[opencode-railway] %s exited with code %s after %ss; restarting in %ss\n' \
+    "${name}" "${rc}" "${runtime}" "${delay}" >&2
+  sleep "${delay}" &
+  child=$!
+  wait "${child}" || true
+  child=""
+  if [ "${runtime}" -lt 60 ]; then
+    delay=$(( delay * 2 ))
+    [ "${delay}" -le "${max_delay}" ] || delay="${max_delay}"
+  fi
+done

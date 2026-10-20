@@ -1,0 +1,25 @@
+#!/bin/sh
+# Runs the OpenCode server (HTTP API plus the embedded web UI) as the
+# "opencode" user. It listens on loopback only: Caddy on $PORT is the only way
+# in from outside the container, and OpenCode itself enforces basic auth
+# because OPENCODE_SERVER_PASSWORD is set.
+#
+# Inputs (environment): OPENCODE_INTERNAL_PORT, OPENCODE_LOG_LEVEL,
+# OPENCODE_WORKSPACE, OPENCODE_SERVER_PASSWORD (read by OpenCode).
+set -eu
+
+port="${OPENCODE_INTERNAL_PORT:-4096}"
+level="${OPENCODE_LOG_LEVEL:-WARN}"
+workspace="${OPENCODE_WORKSPACE:-/data/workspace}"
+
+[ -n "${OPENCODE_SERVER_PASSWORD:-}" ] || {
+  echo "run-server: OPENCODE_SERVER_PASSWORD is empty; refusing to start an unauthenticated server" >&2
+  exit 1
+}
+
+cd "${workspace}"
+exec /usr/local/bin/opencode serve \
+  --hostname 127.0.0.1 \
+  --port "${port}" \
+  --print-logs \
+  --log-level "${level}"

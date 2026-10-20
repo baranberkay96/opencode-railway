@@ -1,0 +1,129 @@
+{
+  "name": "OpenCode v1 AI Coding Agent in the Browser",
+  "description": "Run the OpenCode coding agent 24/7 with web UI, git and a persistent disk.",
+  "category": "AI/ML",
+  "tags": [
+    "opencode",
+    "ai-coding-agent",
+    "coding-agent",
+    "web-ui",
+    "llm",
+    "git",
+    "anthropic",
+    "openai",
+    "openrouter",
+    "developer-tools"
+  ],
+  "image": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/opencode.svg",
+  "upstream": {
+    "app": "anomalyco/opencode",
+    "version": "v1.19.3",
+    "released": "2026-10-16",
+    "checked": "2026-10-20"
+  },
+  "services": {
+    "OpenCode": {
+      "icon": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/opencode.svg",
+      "source": {
+        "repo": "baranberkay96/opencode-railway",
+        "rootDirectory": "/services/opencode"
+      },
+      "startCommand": null,
+      "preDeployCommand": null,
+      "healthcheckPath": "/healthz",
+      "healthcheckTimeout": 300,
+      "restartPolicyType": "ALWAYS",
+      "numReplicas": 1,
+      "cronSchedule": null,
+      "publicDomain": true,
+      "targetPort": 8080,
+      "tcpProxy": null,
+      "volume": {
+        "mountPath": "/data"
+      },
+      "variables": {
+        "OPENCODE_SERVER_PASSWORD": {
+          "defaultValue": "${{secret(32, \"abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789\")}}",
+          "description": "Password for the web UI and API (HTTP basic auth, OpenCode's own server auth). Generated at deploy; the service refuses to start without it.",
+          "required": false
+        },
+        "OPENCODE_SERVER_USERNAME": {
+          "defaultValue": "opencode",
+          "description": "Username for the web UI and API login.",
+          "required": false
+        },
+        "PORT": {
+          "defaultValue": "8080",
+          "description": "Public HTTP port (Caddy in front of OpenCode); the healthcheck and the public domain use it.",
+          "required": false
+        },
+        "ANTHROPIC_API_KEY": {
+          "defaultValue": "",
+          "description": "Optional. Anthropic API key for Claude models. You can also add providers later in the web UI or with `opencode auth login`.",
+          "required": false
+        },
+        "OPENAI_API_KEY": {
+          "defaultValue": "",
+          "description": "Optional. OpenAI API key. ChatGPT Plus/Pro users can log in from the web UI instead (headless device login).",
+          "required": false
+        },
+        "OPENROUTER_API_KEY": {
+          "defaultValue": "",
+          "description": "Optional. OpenRouter API key: many model vendors behind one key.",
+          "required": false
+        },
+        "GOOGLE_GENERATIVE_AI_API_KEY": {
+          "defaultValue": "",
+          "description": "Optional. Google AI Studio (Gemini) API key.",
+          "required": false
+        },
+        "OPENCODE_API_KEY": {
+          "defaultValue": "",
+          "description": "Optional. OpenCode Zen API key for paid Zen models. OpenCode's free models need no key.",
+          "required": false
+        },
+        "GH_TOKEN": {
+          "defaultValue": "",
+          "description": "Optional GitHub token for gh and HTTPS git (clone/push private repos, open PRs). Use GH_TOKEN, not GITHUB_TOKEN, which OpenCode reads as a Copilot key.",
+          "required": false
+        },
+        "GIT_USER_NAME": {
+          "defaultValue": "",
+          "description": "Optional git user.name for the agent's commits (default: OpenCode).",
+          "required": false
+        },
+        "GIT_USER_EMAIL": {
+          "defaultValue": "",
+          "description": "Optional git user.email for the agent's commits (default: opencode@localhost).",
+          "required": false
+        },
+        "GIT_REPO": {
+          "defaultValue": "",
+          "description": "Optional repository URL cloned once into /data/workspace on start (private repos need GH_TOKEN or an SSH key).",
+          "required": false
+        },
+        "AGENT_SUDO": {
+          "defaultValue": "true",
+          "description": "true gives the agent's user passwordless sudo (e.g. to apt install tools); false removes it at start.",
+          "required": false
+        },
+        "OPENCODE_DISABLE_AUTOUPDATE": {
+          "defaultValue": "true",
+          "description": "Turns off OpenCode's update checks and notices; the version is pinned by the image and upgraded by redeploying a newer build.",
+          "required": false
+        },
+        "OPENCODE_LOG_LEVEL": {
+          "defaultValue": "WARN",
+          "description": "OpenCode server log level in the deploy logs: DEBUG, INFO, WARN or ERROR.",
+          "required": false
+        },
+        "RAILWAY_DEPLOYMENT_DRAINING_SECONDS": {
+          "defaultValue": "15",
+          "description": "Grace period for OpenCode and Caddy to stop cleanly on redeploy.",
+          "required": false
+        }
+      }
+    }
+  },
+  "buckets": []
+}
