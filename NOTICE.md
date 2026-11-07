@@ -8,7 +8,7 @@
 | Ubuntu 24.04 LTS | `ubuntu:noble-20260930.1@sha256:68ee2200…` (Docker Hub official image) | various (Ubuntu archive packages) | Base OS; apt packages installed unmodified |
 | git, git-lfs, OpenSSH client, tmux, build-essential, Python 3, ripgrep, fd, jq, sqlite3, tini, sudo and other tools | Ubuntu archive | various (GPL, ISC, MIT, BSD, PSF, ...) | Installed unmodified |
 | Node.js 24.22.0 LTS | https://nodejs.org/dist/ official tarball (SHA-256 checked) | MIT (plus bundled dependency licenses, kept in `/usr/local/share/doc/nodejs/LICENSE`) | Runtime for npm/npx in the agent's projects |
-| GitHub CLI 2.102.0 | cli.github.com apt repository, https://github.com/cli/cli | MIT | Installed unmodified |
+| GitHub CLI 2.103.3 | GitHub release tarball, https://github.com/cli/cli | MIT | Installed unmodified |
 | uv 0.13.1 | Astral installer `astral.sh/uv/0.13.1/install.sh`, https://github.com/astral-sh/uv | MIT or Apache-2.0 | Installed unmodified |
 | Caddy 2.11.7 | GitHub release tarball (SHA-512 checked), https://github.com/caddyserver/caddy | Apache-2.0 (license kept in `/usr/local/share/doc/caddy/LICENSE`) | HTTP front and healthcheck, unmodified binary with our own generated Caddyfile |
 
@@ -32,7 +32,7 @@
 - npm `opencode-ai`: `latest` = 1.19.3 (published 2026-10-16), MIT.
 - Docker Hub `library/ubuntu`: `noble-20260930.1` = `24.04` = `sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac`.
 - Ubuntu noble/noble-updates package indexes (main, universe): all 42 apt packages exist; `setpriv`, `runuser`, `mountpoint` ship in `util-linux` (Priority: required).
-- Node.js `SHASUMS256.txt` for v24.22.0; Caddy `caddy_2.11.7_checksums.txt`; gh 2.102.0 in the cli.github.com apt index; uv 0.13.1 installer URL.
+- Node.js `SHASUMS256.txt` for v24.22.0; Caddy `caddy_2.11.7_checksums.txt`; gh `gh_2.103.3_checksums.txt`; uv 0.13.1 installer URL.
 - Caddy v2.11.7 source: `modules/caddyhttp/rewrite/rewrite.go` (`?` clears the query), `reverseproxy/caddyfile.go` (`handle_response`, named response matchers), `responsematchers.go` (`status 2xx`), `replacer.go` (`{env.*}`), `headers/headers.go` (placeholders in `header_up`), `caddytest/.../reverse_proxy_handle_response.caddyfiletest`.
 
 ## Market templates and repositories reviewed

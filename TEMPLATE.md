@@ -32,7 +32,7 @@ No file or text from these repositories was copied. All files here were written 
 | Base image | `ubuntu:noble-20260930.1@sha256:68ee2200…aff33ac` (= `24.04`) | Ubuntu 24.04 LTS | pushed 2026-10-17 | 2026-10-20 |
 | OpenCode | GitHub release `v1.19.3`: `opencode-linux-x64-baseline.tar.gz` (amd64), `opencode-linux-arm64.tar.gz` (arm64), SHA-256 from the release asset digests; LICENSE from the tag, SHA-256 pinned | 1.19.3 (npm `opencode-ai` `latest`) | 2026-10-16 | 2026-10-20 |
 | Node.js | nodejs.org tarball, SHA-256 pinned | 24.22.0 LTS "Krypton" | 2026-10-14 | 2026-10-20 |
-| GitHub CLI | cli.github.com apt repo | 2.102.0 (latest) | 2026-09-30 | 2026-10-20 |
+| GitHub CLI | GitHub release tarball, SHA-256 pinned (the apt repo lists only the newest release, so pins there stop building) | 2.103.3 | 2026-11-03 | 2026-11-07 |
 | Caddy | GitHub release tarball, SHA-512 pinned | 2.11.7 (latest) | 2026-10-03 | 2026-10-20 |
 | uv | Astral installer `astral.sh/uv/0.13.1/install.sh` | 0.13.1 (0.13.2 came out 2026-10-19) | 2026-10-14 | 2026-10-20 |
 
@@ -132,7 +132,7 @@ Model usage is billed by the provider. Minimum plan: **Trial** boots it (well un
 
 ## Verification checklist
 
-- [ ] Build completes on Railway; the log shows `opencode --version: 1.19.3` and the versions table (OpenCode 1.19.3, Node v24.22.0, uv 0.13.1, gh 2.102.0, Caddy v2.11.7).
+- [ ] Build completes on Railway; the log shows `opencode --version: 1.19.3` and the versions table (OpenCode 1.19.3, Node v24.22.0, uv 0.13.1, gh 2.103.3, Caddy v2.11.7).
 - [ ] Deploy logs: `first boot: preparing /data`, `starting OpenCode server on 127.0.0.1:4096`, `web UI: https://...`, no `not a mounted volume` warning, no restart-loop lines.
 - [ ] `GET /healthz` → 200 `ok` without credentials (body is only `ok`); `GET /healthz?auth_token=x` → still `ok`.
 - [ ] `GET /` and `GET /global/health` without credentials → 401 with `WWW-Authenticate: Basic`; with `opencode`/password → web UI / JSON `{"healthy":true,"version":"1.19.3"}`.

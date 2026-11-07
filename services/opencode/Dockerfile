@@ -27,7 +27,9 @@ ARG PIN_NODE=24.22.0
 ARG PIN_NODE_SHA256_AMD64=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008
 ARG PIN_NODE_SHA256_ARM64=fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143
 ARG PIN_UV=0.13.1
-ARG PIN_GH=2.102.0
+ARG PIN_GH=2.103.3
+ARG PIN_GH_SHA256_AMD64=4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d
+ARG PIN_GH_SHA256_ARM64=ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63
 ARG PIN_CADDY=2.11.7
 ARG PIN_CADDY_SHA512_AMD64=a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7
 ARG PIN_CADDY_SHA512_ARM64=3db36ba90c7a6e8dda40ee3dd71fa08844c76b5fb08f61b31e5e78d2ed38e71c51dc7baed875e50d1ca1279196e84302967237386ae87c91ae9f2aaceada682e
@@ -79,15 +81,21 @@ RUN case "$(dpkg --print-architecture)" in \
  && corepack enable \
  && node --version && npm --version
 
-# GitHub CLI from GitHub's signed apt repository.
-RUN install -d -m 0755 /etc/apt/keyrings \
- && curl -fsSLo /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg \
- && chmod 0644 /etc/apt/keyrings/githubcli-archive-keyring.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends "gh=${PIN_GH}" \
- && rm -rf /var/lib/apt/lists/* \
+# GitHub CLI from its release tarball, checksum-verified. Not from the apt
+# repository: it lists only the newest release, so a pinned version stops building.
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) gh_arch=amd64; gh_sha="${PIN_GH_SHA256_AMD64}" ;; \
+      arm64) gh_arch=arm64; gh_sha="${PIN_GH_SHA256_ARM64}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSLo /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${PIN_GH}/gh_${PIN_GH}_linux_${gh_arch}.tar.gz" \
+ && echo "${gh_sha}  /tmp/gh.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gh.tar.gz -C /tmp --no-same-owner \
+ && install -m 0755 "/tmp/gh_${PIN_GH}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh \
+ && install -d /usr/local/share/doc/gh /usr/share/bash-completion/completions \
+ && install -m 0644 "/tmp/gh_${PIN_GH}_linux_${gh_arch}/LICENSE" /usr/local/share/doc/gh/LICENSE \
+ && /usr/local/bin/gh completion -s bash > /usr/share/bash-completion/completions/gh \
+ && rm -rf /tmp/gh.tar.gz "/tmp/gh_${PIN_GH}_linux_${gh_arch}" \
  && gh --version
 
 # Caddy (HTTP front on $PORT): release tarball, checksum-verified.
